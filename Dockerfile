@@ -44,5 +44,5 @@ ENV PATH="/app/.venv/bin:$PATH" \
     APP_MODE=standalone
 # --------------------------------------------------------------------------- #
 USER appuser
-EXPOSE 5000
+EXPOSE 5000 8765
 CMD ["/app/start.sh"]
