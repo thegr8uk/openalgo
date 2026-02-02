@@ -309,7 +309,30 @@ git remote add upstream https://github.com/marketcalls/openalgo.git
 git remote -v
 ```
 
-### 2. Create a Feature Branch
+### 2. Frontend Build Assets (Auto-Built by CI)
+
+The `/frontend/dist` folder contains pre-built frontend assets. **CI automatically rebuilds and commits these assets** when changes are merged to main.
+
+**How it works:**
+- PRs are tested with a fresh frontend build (but not committed)
+- When merged to main, CI automatically:
+  1. Builds the frontend (`npm run build`)
+  2. Commits the updated `/frontend/dist` to the repo
+  3. Pushes Docker image to Docker Hub
+
+**For Contributors:**
+- You can include `/frontend/dist` changes in your PR, OR
+- Let CI auto-build after merge (recommended)
+- Focus on source code changes - CI handles the build
+
+**Setup (optional - to ignore local dist changes):**
+```bash
+git update-index --skip-worktree frontend/dist/*
+```
+
+> **Note:** The CI uses `[skip ci]` when auto-committing dist to prevent infinite loops.
+
+### 3. Create a Feature Branch
 
 ```bash
 # Update your main branch
@@ -325,7 +348,7 @@ git pull upstream main
 git checkout -b feature/your-feature-name
 ```
 
-### 3. Make Your Changes
+### 4. Make Your Changes
 
 Follow these guidelines while developing:
 
@@ -378,7 +401,7 @@ git commit -m "docs: update WebSocket setup instructions"
 git commit -m "refactor: optimize order processing pipeline"
 ```
 
-### 4. Test Your Changes
+### 5. Test Your Changes
 
 ```bash
 # Run the application in development mode
@@ -401,7 +424,7 @@ python app.py
 - [ ] API endpoints return correct responses
 - [ ] WebSocket connections work (if applicable)
 
-### 5. CSS Compilation (for UI changes)
+### 6. CSS Compilation (for UI changes)
 
 If you modified any HTML templates or Tailwind classes:
 
@@ -416,7 +439,7 @@ npm run build
 # Only edit src/css/styles.css
 ```
 
-### 6. Push to Your Fork
+### 7. Push to Your Fork
 
 ```bash
 # Add your changes
@@ -429,7 +452,7 @@ git commit -m "feat: add your feature description"
 git push origin feature/your-feature-name
 ```
 
-### 7. Create a Pull Request
+### 8. Create a Pull Request
 
 1. Go to your fork on GitHub
 2. Click **"Compare & pull request"**
