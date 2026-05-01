@@ -140,11 +140,8 @@ export function useSocket() {
     const host = window.location.hostname
     const port = window.location.port
 
-    // Use polling transport only - WebSocket upgrade fails with threading async mode
-    // Polling is still real-time via HTTP long-polling
     socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
+      transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
       timeout: 20000,

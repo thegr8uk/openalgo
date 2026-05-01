@@ -252,6 +252,13 @@ def transform_positions_data(positions_data):
         elif transformed_position["quantity"] != 0:
             transformed_position["average_price"] = 0.0
 
+        # Calculate P&L from buy/sell amounts (includes carry-forward amounts)
+        # For closed positions (qty=0): this is exact realized P&L
+        # For open positions: this reflects realized portion only (no LTP in Kotak position response)
+        total_buy_amt = float(position.get("buyAmt", 0)) + float(position.get("cfBuyAmt", 0))
+        total_sell_amt = float(position.get("sellAmt", 0)) + float(position.get("cfSellAmt", 0))
+        transformed_position["pnl"] = round(total_sell_amt - total_buy_amt, 2)
+
         transformed_data.append(transformed_position)
 
     return transformed_data
