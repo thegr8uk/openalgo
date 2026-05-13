@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import pandas as pd
 
 from database.auth_db import get_auth_token_broker
-from database.token_db import get_token
+from database.token_db import get_oa_symbol, get_token
 from utils.constants import VALID_EXCHANGES
 from utils.logging import get_logger
 
@@ -103,6 +103,18 @@ def get_history_with_auth(
         - Response data (dict)
         - HTTP status code (int)
     """
+    # Normalize broker symbol → OpenAlgo symbol.
+    # Kotak (and some other brokers) return brsymbol format in the tradebook
+    # (e.g. NIFTY2651223950PE) but the master contract DB is keyed on OA symbol
+    # (e.g. NIFTY12MAY2623950PE).  Try to resolve the OA symbol first; if the
+    # lookup succeeds the caller passed a brsymbol and we swap it out.
+    oa_sym = get_oa_symbol(symbol, exchange)
+    if oa_sym:
+        logger.debug(
+            f"HISTORY - Normalized broker symbol {symbol!r} → OA symbol {oa_sym!r} [{exchange}]"
+        )
+        symbol = oa_sym
+
     # Validate symbol and exchange before making broker API call
     is_valid, error_msg = validate_symbol_exchange(symbol, exchange)
     if not is_valid:
