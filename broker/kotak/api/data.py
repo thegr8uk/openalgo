@@ -1,10 +1,13 @@
+import base64
 import json
 import time
 import urllib.parse
+from datetime import datetime
 
 import httpx
 import pandas as pd
 
+from broker.kotak.database.master_contract_db import SymToken, db_session
 from database.token_db import get_br_symbol, get_brexchange, get_token
 from utils.httpx_client import get_httpx_client
 from utils.logging import get_logger
@@ -30,9 +33,29 @@ class BrokerData:
         self.last_quote_error = None
         logger.info(f"Using quotes baseUrl: {self.quotes_base_url}")
 
-        # Define empty timeframe map since Kotak Neo doesn't support historical data
-        self.timeframe_map = {}
-        logger.warning("Kotak Neo does not support historical data intervals")
+        # CMOTS TradingView API interval mapping
+        # Supported: 1,2,3,5,10,15,30,60,75,120,125,180,D,W,M
+        self.timeframe_map = {
+            "1m":  "1",
+            "2m":  "2",
+            "3m":  "3",
+            "5m":  "5",
+            "10m": "10",
+            "15m": "15",
+            "30m": "30",
+            "60m": "60",
+            "1h":  "60",
+            "75m": "75",
+            "120m": "120",
+            "125m": "125",
+            "180m": "180",
+            "D":   "D",
+            "W":   "W",
+            "M":   "M",
+        }
+
+        # CMOTS history base URL (no auth required - uses public token endpoint)
+        self.cmots_base_url = "https://nksapi.kotaksecurities.com/1newserviceapi/cmots/v1/equity/TradingViewData_AllAssetNew/i/"
 
     def _get_kotak_exchange(self, exchange):
         """Map OpenAlgo exchange to Kotak exchange segment"""
@@ -543,23 +566,296 @@ class BrokerData:
             "totalsellqty": 0,
         }
 
+    # ------------------------------------------------------------------
+    # Internal helpers for historical data
+    # ------------------------------------------------------------------
+
+    def _resolve_fno_details(self, symbol: str, exchange: str) -> dict | None:
+        """
+        Query the DB for an FNO/BFO instrument and return the fields needed
+        to build the CMOTS payload.
+
+        Returns a dict with keys:
+          underlying, expiry_api (DD-MON-YYYY), strike_api, opttype, brexchange
+        or None if the symbol cannot be resolved.
+        """
+        br_symbol = get_br_symbol(symbol, exchange)
+        if not br_symbol:
+            logger.error(f"Cannot resolve br_symbol for {symbol}/{exchange}")
+            return None
+
+        try:
+            with db_session() as session:
+                row = (
+                    session.query(SymToken)
+                    .filter(SymToken.exchange == exchange, SymToken.brsymbol == br_symbol)
+                    .first()
+                )
+                if not row:
+                    logger.error(f"No DB row for {exchange}:{br_symbol}")
+                    return None
+
+                # name stores the underlying root (e.g. NIFTY, BANKNIFTY, RELIANCE)
+                underlying = row.name
+                instrumenttype = row.instrumenttype or ""
+                brexchange = row.brexchange or ""
+
+                # expiry in DB: DD-MON-YY  → convert to DD-MON-YYYY for API
+                expiry_db = row.expiry or "-"  # e.g. "12-MAY-26"
+                if expiry_db and expiry_db != "-":
+                    try:
+                        dt = datetime.strptime(expiry_db, "%d-%b-%y")
+                        expiry_api = dt.strftime("%d-%b-%Y").upper()  # 12-MAY-2026
+                    except ValueError:
+                        expiry_api = expiry_db
+                else:
+                    expiry_api = "-"
+
+                # Strike: store as float in DB; format with 2 decimals
+                strike_val = row.strike or 0
+                strike_api = f"{float(strike_val):.2f}"
+
+                # opttype: CE, PE → CE/PE; FUT → XX or "-"
+                if instrumenttype in ("CE", "PE"):
+                    opttype = instrumenttype
+                elif instrumenttype == "FUT":
+                    opttype = "-"  # CMOTS uses XX but examples show "-" is fine for FUT
+                else:
+                    opttype = "-"
+
+                return {
+                    "underlying": underlying,
+                    "expiry_api": expiry_api,
+                    "strike_api": strike_api,
+                    "opttype": opttype,
+                    "brexchange": brexchange,
+                    "instrumenttype": instrumenttype,
+                }
+        except Exception as e:
+            logger.error(f"Error resolving FNO details for {symbol}/{exchange}: {e}")
+            return None
+
+    def _build_cmots_payload(
+        self,
+        symbol: str,
+        exchange: str,
+        interval: str,
+        from_date: str,
+        to_date: str,
+    ) -> dict | None:
+        """
+        Build the JSON payload dict for the CMOTS TradingViewData_AllAssetNew endpoint.
+
+        exchange values from OpenAlgo: NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX
+        """
+        # Determine asset class and exchange string for the payload
+        if exchange in ("NSE", "BSE", "NSE_INDEX", "BSE_INDEX"):
+            # Equity / Index
+            co_code = get_token(symbol, exchange) or "0"
+            # For indices, token may not exist – use 0
+            if "INDEX" in exchange:
+                api_exchange = "NSE" if "NSE" in exchange else "BSE"
+                asset = "INDEX"
+                sym_name = symbol.upper()
+                co_code = "0"
+            else:
+                api_exchange = exchange
+                asset = "EQ"
+                # symbol name for the API is the underlying pSymbolName stored as `symbol` in DB
+                # but for EQ we can just pass the OpenAlgo symbol (ITC, RELIANCE …)
+                sym_name = symbol.upper()
+            return {
+                "co_code": str(co_code),
+                "exchange": api_exchange,
+                "fromdate": from_date,
+                "todate": to_date,
+                "interval": interval,
+                "Asset": asset,
+                "Symbol": sym_name,
+                "expirydate": "-",
+                "strikeprice": "0",
+                "opttype": "-",
+                "option": "Interval",
+                "candleLimit": "400",
+            }
+
+        elif exchange in ("NFO", "BFO", "CDS", "MCX"):
+            # Derivatives
+            details = self._resolve_fno_details(symbol, exchange)
+            if not details:
+                return None
+
+            api_exchange = "NSE"  # default
+            if exchange in ("NFO", "CDS"):
+                api_exchange = "NSE"
+            elif exchange in ("BFO",):
+                api_exchange = "BSE"
+            elif exchange == "MCX":
+                api_exchange = "MCX"
+
+            # Determine asset type
+            if details["instrumenttype"] == "FUT":
+                asset = "FUT"
+                opttype = "-"
+            else:
+                asset = "FNO"
+                opttype = details["opttype"]
+
+            return {
+                "co_code": "0",
+                "exchange": api_exchange,
+                "fromdate": from_date,  # Pass actual date so API returns only the requested range
+                "todate": to_date,
+                "interval": interval,
+                "Asset": asset,
+                "Symbol": details["underlying"],
+                "expirydate": details["expiry_api"],
+                "strikeprice": details["strike_api"] if details["instrumenttype"] != "FUT" else "0",
+                "opttype": opttype,
+                "option": "Interval",
+                "candleLimit": "400",
+            }
+        else:
+            logger.error(f"Unsupported exchange for CMOTS history: {exchange}")
+            return None
+
+    def _fetch_cmots_candles(self, payload: dict) -> list[dict]:
+        """
+        Encode the payload as base64, call the CMOTS endpoint, and return raw result dict.
+        Returns the 'result' dict on success, empty dict otherwise.
+        """
+        payload_json = json.dumps(payload, separators=(",", ":"))
+        encoded = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
+        url = f"{self.cmots_base_url}{encoded}"
+
+        logger.info(f"CMOTS HISTORY - Fetching: {url[:120]}...")
+        logger.debug(f"CMOTS HISTORY - Payload: {payload_json}")
+
+        client = get_httpx_client()
+        try:
+            response = client.get(url, timeout=30)
+            logger.info(f"CMOTS HISTORY - Status: {response.status_code}")
+            if response.status_code != 200:
+                logger.warning(f"CMOTS HISTORY - Non-200: {response.text[:300]}")
+                return {}
+            data = response.json()
+            if data.get("status") != "SUCCESS":
+                logger.warning(f"CMOTS HISTORY - API status not SUCCESS: {data}")
+                return {}
+            return data.get("result", {})
+        except httpx.HTTPError as e:
+            logger.error(f"CMOTS HISTORY - HTTP error: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"CMOTS HISTORY - Error: {e}")
+            return {}
+
+    @staticmethod
+    def _parse_cmots_timestamp(ts_str: str) -> int:
+        """
+        Parse CMOTS timestamp string to Unix epoch (seconds).
+        Formats seen: "08-May-2026 15:28:00"
+        For daily/weekly/monthly candles the format may be "08-May-2026" only.
+        """
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y"):
+            try:
+                dt = datetime.strptime(ts_str.strip(), fmt)
+                return int(dt.timestamp())
+            except ValueError:
+                continue
+        logger.warning(f"CMOTS HISTORY - Cannot parse timestamp: {ts_str!r}")
+        return 0
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def get_history(
         self, symbol: str, exchange: str, interval: str, start_date: str, end_date: str
     ) -> pd.DataFrame:
-        """Placeholder for historical data - not supported by Kotak Neo"""
+        """
+        Fetch historical OHLCV candles using the CMOTS TradingViewData_AllAssetNew
+        endpoint discovered via Kotak web UI.
+
+        Args:
+            symbol    : OpenAlgo symbol (e.g. ITC, NIFTY25MAY24000CE)
+            exchange  : OpenAlgo exchange (NSE, BSE, NFO, BFO, CDS, MCX, NSE_INDEX, BSE_INDEX)
+            interval  : OpenAlgo interval string (1m, 5m, 15m, 30m, 60m, 1h, D, W, M …)
+            start_date: "YYYY-MM-DD"
+            end_date  : "YYYY-MM-DD"
+
+        Returns:
+            pd.DataFrame with columns [timestamp, open, high, low, close, volume]
+            timestamp is Unix epoch in seconds (int64).
+        """
         empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        logger.warning("Kotak Neo does not support historical data")
-        return empty_df
+
+        # Map interval
+        cmots_interval = self.timeframe_map.get(interval)
+        if not cmots_interval:
+            logger.error(f"CMOTS HISTORY - Unsupported interval: {interval}")
+            return empty_df
+
+        try:
+            payload = self._build_cmots_payload(
+                symbol, exchange, cmots_interval, start_date, end_date
+            )
+            if payload is None:
+                logger.error(f"CMOTS HISTORY - Could not build payload for {symbol}/{exchange}")
+                return empty_df
+
+            result = self._fetch_cmots_candles(payload)
+            if not result:
+                logger.warning(f"CMOTS HISTORY - Empty result for {symbol}/{exchange}")
+                return empty_df
+
+            # Unpack parallel arrays
+            timestamps = result.get("timestamparray", [])
+            opens      = result.get("openpricearray", [])
+            highs      = result.get("highpricearray", [])
+            lows       = result.get("lowpricearray", [])
+            closes     = result.get("closepricearray", [])
+            volumes    = result.get("volumearray", [])
+
+            if not timestamps:
+                logger.info(f"CMOTS HISTORY - No candles returned for {symbol}/{exchange}")
+                return empty_df
+
+            rows = []
+            for i, ts_str in enumerate(timestamps):
+                epoch = self._parse_cmots_timestamp(ts_str)
+                rows.append({
+                    "timestamp": epoch,
+                    "open":      float(opens[i])   if i < len(opens)   else 0.0,
+                    "high":      float(highs[i])   if i < len(highs)   else 0.0,
+                    "low":       float(lows[i])    if i < len(lows)    else 0.0,
+                    "close":     float(closes[i])  if i < len(closes)  else 0.0,
+                    "volume":    int(volumes[i])   if i < len(volumes) else 0,
+                })
+
+            df = pd.DataFrame(rows)
+            df = (
+                df.sort_values("timestamp")
+                  .drop_duplicates(subset=["timestamp"])
+                  .reset_index(drop=True)
+            )
+            df["volume"] = df["volume"].astype(int)
+            logger.info(
+                f"CMOTS HISTORY - Fetched {len(df)} candles for {symbol}/{exchange} [{interval}]"
+            )
+            return df
+
+        except Exception as e:
+            logger.exception(f"CMOTS HISTORY - Unexpected error for {symbol}/{exchange}: {e}")
+            return empty_df
 
     def get_supported_intervals(self) -> dict:
-        """Return supported intervals matching the format expected by intervals.py"""
-        intervals = {
+        """Return supported intervals in the format expected by OpenAlgo intervals.py"""
+        return {
             "seconds": [],
-            "minutes": [],
-            "hours": [],
-            "days": [],
-            "weeks": [],
-            "months": [],
+            "minutes": ["1m", "2m", "3m", "5m", "10m", "15m", "30m", "60m", "75m", "120m", "125m", "180m"],
+            "hours":   ["1h"],
+            "days":    ["D"],
+            "weeks":   ["W"],
+            "months":  ["M"],
         }
-        logger.warning("Kotak Neo does not support historical data intervals")
-        return intervals
