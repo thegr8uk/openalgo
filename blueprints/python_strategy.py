@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time as time_module
 from datetime import date, datetime, time
 from pathlib import Path
 from time import monotonic, sleep
@@ -667,12 +668,15 @@ def stop_strategy_process(strategy_id):
                             pass  # Process already dead
             elif hasattr(process, "terminate"):
                 # For psutil.Process objects
+                # Use _psutil_wait_poll instead of process.wait() because
+                # eventlet monkey-patches select and removes select.poll(),
+                # which psutil's wait() relies on internally (Linux).
                 try:
                     process.terminate()
-                    process.wait(timeout=5)
+                    _psutil_wait_poll(process, 5)
                 except psutil.TimeoutExpired:
                     process.kill()
-                    process.wait(timeout=2)
+                    _psutil_wait_poll(process, 2)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass  # Process already dead or no permission
             else:
@@ -769,6 +773,25 @@ def check_process_status(pid):
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
     return False
+
+
+def _psutil_wait_poll(process, timeout):
+    """Wait for a psutil.Process to terminate.
+
+    psutil's ``process.wait()`` uses ``select.poll()`` internally on Linux,
+    which is unavailable when eventlet monkey-patches the select module.
+    This fallback polls ``process.is_running()`` in a loop instead.
+    """
+    deadline = time_module.monotonic() + timeout
+    while True:
+        try:
+            if not process.is_running():
+                return
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return  # Process already gone
+        if time_module.monotonic() >= deadline:
+            raise psutil.TimeoutExpired(timeout, pid=process.pid)
+        time_module.sleep(0.1)
 
 
 def close_log_handle_safely(strategy_info):

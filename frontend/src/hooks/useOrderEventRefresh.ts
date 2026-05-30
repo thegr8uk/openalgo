@@ -57,11 +57,17 @@ export function useOrderEventRefresh(
 
   const socketRef = useRef<Socket | null>(null)
   const refreshFnRef = useRef(refreshFn)
+  // Store events and delay in refs so the socket effect doesn't need them as
+  // dependencies — callers commonly pass inline array literals which would
+  // create a new reference on every render and trigger a full
+  // disconnect/reconnect cycle per render.
+  const eventsRef = useRef(events)
+  const delayRef = useRef(delay)
 
-  // Keep refresh function reference up to date
-  useEffect(() => {
-    refreshFnRef.current = refreshFn
-  }, [refreshFn])
+  // Keep all mutable values up to date without causing reconnects
+  useEffect(() => { refreshFnRef.current = refreshFn }, [refreshFn])
+  useEffect(() => { eventsRef.current = events }, [events])
+  useEffect(() => { delayRef.current = delay }, [delay])
 
   useEffect(() => {
     if (!enabled) return
@@ -72,8 +78,7 @@ export function useOrderEventRefresh(
     const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
+      transports: ['websocket', 'polling'],
     })
 
     const socket = socketRef.current
@@ -81,22 +86,22 @@ export function useOrderEventRefresh(
     // Create handler for each event type
     const handleEvent = () => {
       // Delay slightly to allow server to process the event
-      setTimeout(() => refreshFnRef.current(), delay)
+      setTimeout(() => refreshFnRef.current(), delayRef.current)
     }
 
     // Register listeners for all specified events
-    events.forEach((event) => {
+    eventsRef.current.forEach((event) => {
       socket.on(event, handleEvent)
     })
 
-    // Cleanup on unmount
+    // Cleanup on unmount or when enabled changes
     return () => {
-      events.forEach((event) => {
+      eventsRef.current.forEach((event) => {
         socket.off(event, handleEvent)
       })
       socket.disconnect()
     }
-  }, [events, delay, enabled])
+  }, [enabled]) // Only reconnect when enabled changes, not on every render
 }
 
 /**
@@ -127,8 +132,7 @@ export function useSocketConnection(enabled = true): {
     const port = window.location.port
 
     socketRef.current = io(`${protocol}//${host}:${port}`, {
-      transports: ['polling'],
-      upgrade: false,
+      transports: ['websocket', 'polling'],
     })
 
     return () => {
