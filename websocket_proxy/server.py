@@ -114,6 +114,18 @@ class WebSocketProxy:
         ZMQ_PORT = os.getenv("ZMQ_PORT")
         self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_PORT}")  # Connect to broker adapter publisher
 
+        # In Docker/standalone mode the Flask process and the WS subprocess are
+        # separate OS processes.  The WS subprocess owns ZMQ_PORT for broker tick
+        # data; Flask publishes cache-invalidation messages on the dedicated
+        # ZMQ_CACHE_PORT so the two publishers never conflict.  Connect the SUB
+        # to both channels so zmq_listener handles tick data AND cache messages.
+        ZMQ_CACHE_PORT = os.getenv("ZMQ_CACHE_PORT", "5556")
+        if ZMQ_CACHE_PORT != ZMQ_PORT:
+            self.socket.connect(f"tcp://{ZMQ_HOST}:{ZMQ_CACHE_PORT}")
+            logger.debug(
+                f"[ZMQ] SUB also connected to cache-invalidation port {ZMQ_CACHE_PORT}"
+            )
+
         # Set up ZeroMQ subscriber to receive all messages
         self.socket.setsockopt(zmq.SUBSCRIBE, b"")  # Subscribe to all topics
 
@@ -1875,6 +1887,20 @@ async def main():
     try:
         # Load environment variables
         load_dotenv()
+
+        # Pre-bind the shared ZMQ publisher BEFORE WebSocketProxy.__init__ reads
+        # ZMQ_PORT.  In Docker/standalone mode (start.sh) and in the gunicorn+
+        # eventlet subprocess path, this WS process must claim ZMQ_PORT first so
+        # that the broker-adapter publisher ends up on the same port the SUB will
+        # connect to.  The sibling Flask/gunicorn process publishes cache-
+        # invalidation messages on the SEPARATE ZMQ_CACHE_PORT channel — it must
+        # never fight for ZMQ_PORT, so we grab ZMQ_PORT here immediately.
+        try:
+            from .connection_manager import SharedZmqPublisher
+            bound_port = SharedZmqPublisher().bind()
+            logger.info(f"[ZMQ] Broker-tick publisher pre-bound to port {bound_port}")
+        except Exception as _pre_bind_err:
+            logger.warning(f"[ZMQ] Could not pre-bind publisher: {_pre_bind_err}")
 
         # Get WebSocket configuration from environment variables
         ws_host = os.getenv("WEBSOCKET_HOST", "127.0.0.1")

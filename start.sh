@@ -83,6 +83,7 @@ WEBSOCKET_URL = '${WEBSOCKET_URL:-wss://${HOST_DOMAIN}/ws}'
 # in the same process; exposing ZMQ would leak the raw tick feed.
 ZMQ_HOST = '127.0.0.1'
 ZMQ_PORT = '${ZMQ_PORT:-5555}'
+ZMQ_CACHE_PORT = '${ZMQ_CACHE_PORT:-5556}'
 
 # Logging Configuration
 LOG_TO_FILE = '${LOG_TO_FILE:-True}'

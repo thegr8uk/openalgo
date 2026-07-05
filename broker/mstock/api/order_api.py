@@ -673,3 +673,52 @@ def cancel_all_orders_api(data, auth):
         error_message = response_data.get("message", "Failed to cancel all orders")
         logger.error(f"Cancel all failed: {error_message}")
         return [], pending_order_ids  # Return as failed
+
+
+def get_order_details(order_id, auth):
+    """Fetch details of an individual order from mStock Type B API."""
+    payload = json.dumps({"order_no": order_id})
+    return get_api_response("/order/details", auth, method="POST", payload=payload)
+
+
+def convert_position(params, auth):
+    """
+    Convert position (e.g. from CNC to MIS or NRML) using mStock Type B API.
+    
+    params should contain the keys:
+    exchange, symboltoken, oldproducttype, newproducttype, tradingsymbol,
+    symbolname, instrumenttype, priceden, pricenum, genden, gennum, precision,
+    multiplier, boardlotsize, buyqty, sellqty, buyamount, sellamount,
+    transactiontype, quantity, type
+    """
+    payload = json.dumps(params)
+    return get_api_response("/portfolio/convertposition", auth, method="POST", payload=payload)
+
+
+def create_basket(basket_name, basket_desc, auth):
+    """Create a new order basket."""
+    payload = json.dumps({"BaskName": basket_name, "BaskDesc": basket_desc})
+    return get_api_response("/CreateBasket", auth, method="POST", payload=payload)
+
+
+def fetch_basket(auth):
+    """Fetch all order baskets."""
+    return get_api_response("/FetchBasket", auth, method="GET")
+
+
+def rename_basket(basket_name, basket_id, auth):
+    """Rename an existing order basket."""
+    payload = json.dumps({"basketName": basket_name, "BasketId": basket_id})
+    return get_api_response("/RenameBasket", auth, method="PUT", payload=payload)
+
+
+def delete_basket(basket_id, auth):
+    """Delete an existing order basket."""
+    payload = json.dumps({"BasketId": basket_id})
+    return get_api_response("/DeleteBasket", auth, method="DELETE", payload=payload)
+
+
+def calculate_basket(params, auth):
+    """Calculate margin requirement for a basket."""
+    payload = json.dumps(params)
+    return get_api_response("/CalculateBasket", auth, method="POST", payload=payload)

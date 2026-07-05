@@ -61,12 +61,8 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         self.auth_token = auth_token
         self.data_client = BrokerData(auth_token=auth_token)
-        # Pass a token_provider so the client re-reads a fresh access token from
-        # the database before each reconnect; Indian broker tokens roll over
-        # daily (~3 AM IST) and the construction-time token is dead after rollover.
-        self.ws_client = MstockWebSocket(
-            auth_token=auth_token, token_provider=self._get_fresh_auth_token
-        )
+        self.ws_client = MstockWebSocket(auth_token=auth_token)
+        self.ws_client.on_connect = self._on_ws_connect
         self.running = True
         self.logger.info(f"mstock adapter initialized for user {user_id}")
 
@@ -99,6 +95,37 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self.ws_client.connect_stream(self._on_data)
         self.connected = True
         self.logger.info("mstock WebSocket adapter connected")
+
+    def _on_ws_connect(self) -> None:
+        """Called when WebSocket connects and logs in. Resubscribe to all stored subscriptions."""
+        self.logger.info("mstock WebSocket logged in callback triggered")
+        with self.lock:
+            subs = list(self.subscriptions.values())
+
+        for sub in subs:
+            try:
+                token = sub["token"]
+                exchange_type = sub["exchange_type"]
+                mode = sub["mode"]
+                symbol = sub["symbol"]
+                exchange = sub["exchange"]
+                mstock_correlation_id = f"mstock_{token}_{mode}"
+
+                if not self.ws_client or mstock_correlation_id not in self.ws_client.subscriptions:
+                    result = self.ws_client.subscribe_stream(
+                        mstock_correlation_id, token, exchange_type, mode
+                    )
+                    if result:
+                        self.token_correlation_ids[token] = mstock_correlation_id
+                        self.logger.info(
+                            f"Sent pending subscription for {symbol} (token: {token}) on {exchange} with mode {mode}"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"Failed to send pending subscription for {symbol} on {exchange}"
+                        )
+            except Exception as e:
+                self.logger.error(f"Error subscribing to {sub.get('symbol')} on connect: {e}")
 
     def _on_data(self, quote_data: dict) -> None:
         """Callback function called when data is received from WebSocket"""
@@ -313,6 +340,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         new_mode = 0
         token = None
         exchange_type = None
+        current_correlation_id = None
 
         with self.lock:
             if correlation_id not in self.subscriptions:
@@ -335,6 +363,7 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             if max_mode_for_token < current_mstock_mode:
                 needs_ws_update = True
                 new_mode = max_mode_for_token
+                current_correlation_id = self.token_correlation_ids.get(token)
                 if new_mode > 0:
                     self.token_modes[token] = new_mode
                 else:
@@ -343,8 +372,6 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
         if needs_ws_update and self.ws_client and self.running:
             try:
-                current_correlation_id = self.token_correlation_ids.get(token)
-
                 if new_mode == 0:
                     if current_correlation_id:
                         self.ws_client.unsubscribe_stream(current_correlation_id)
@@ -367,6 +394,30 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
         return {
             "status": "success",
             "message": f"Unsubscribed from {symbol} on {exchange} mode {mode}",
+        }
+
+    def unsubscribe_all(self) -> dict[str, Any]:
+        """
+        Unsubscribe from all subscriptions without disconnecting.
+        """
+        self.logger.info("mstock adapter unsubscribing from all symbols")
+
+        with self.lock:
+            correlation_ids = list(self.token_correlation_ids.values())
+            self.subscriptions.clear()
+            self.token_modes.clear()
+            self.token_correlation_ids.clear()
+
+        if self.ws_client and self.running:
+            for correlation_id in correlation_ids:
+                try:
+                    self.ws_client.unsubscribe_stream(correlation_id)
+                except Exception as e:
+                    self.logger.error(f"Error unsubscribing correlation ID {correlation_id}: {e}")
+
+        return {
+            "status": "success",
+            "message": "Unsubscribed from all symbols",
         }
 
     def _create_error_response(self, error_code: str, message: str) -> dict[str, Any]:

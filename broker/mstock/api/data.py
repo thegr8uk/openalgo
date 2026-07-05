@@ -901,3 +901,34 @@ class BrokerData:
 
         except Exception as e:
             raise Exception(f"Error fetching market depth: {str(e)}")
+
+
+def get_option_chain_master(exchange_id: str, auth_token: str) -> dict:
+    """Fetch option chain master from mStock Type B API."""
+    return get_api_response(f"/getoptionchainmaster/{exchange_id}", auth_token, "GET")
+
+
+def get_option_chain_data(exchange_id: str, expiry: str, token: str, auth_token: str) -> dict:
+    """Fetch option chain data from mStock Type B API."""
+    return get_api_response(f"/GetOptionChain/{exchange_id}/{expiry}/{token}", auth_token, "GET")
+
+
+def loser_gainer(exchange: str, security_id_code: str, segment: str, type_flag: str, auth_token: str) -> dict:
+    """Fetch gainers and losers from mStock Type B API."""
+    payload = {
+        "Exchange": exchange,
+        "SecurityIdCode": security_id_code,
+        "segment": segment,
+        "TypeFlag": type_flag
+    }
+    return get_api_response("/losergainer", auth_token, "POST", payload=payload)
+
+
+def get_intraday_chart(exchange: str, symboltoken: str, interval: str, auth_token: str) -> dict:
+    """Get raw intraday chart from mStock Type B API."""
+    payload = {
+        "exchange": exchange,
+        "symboltoken": symboltoken,
+        "interval": interval,
+    }
+    return get_api_response("/instruments/intraday", auth_token, "POST", payload=payload)

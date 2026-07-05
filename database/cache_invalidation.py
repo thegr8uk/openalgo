@@ -3,23 +3,28 @@
 ZeroMQ-based cache invalidation for cross-component delivery.
 
 When auth tokens are updated or revoked from a Flask request handler,
-an invalidation message is published on the same ZMQ bus that broker
-adapters use for market data. The websocket proxy's existing SUB
-listener picks it up via the `CACHE_INVALIDATE_*` topic prefix and
-clears its local auth caches.
+an invalidation message is published on ZMQ_CACHE_PORT so the WebSocket
+proxy's existing SUB listener picks it up via the `CACHE_INVALIDATE_*`
+topic prefix and clears its local auth caches.
 
-Fix history — issue #1374:
-Earlier this module created its own `zmq.PUB` socket and `connect()`ed
-to the ZMQ port. That collided with `SharedZmqPublisher` (also a PUB,
-but `bind`-ing the same endpoint) — two PUBs on one wire is an invalid
-ZMQ topology and messages were silently dropped. The fix routes
-publishes through the existing `SharedZmqPublisher` singleton, so there
-is exactly one PUB on the wire and the proxy's SUB receives both market
-data and cache invalidations through the same pipe. No new port, no new
-env var.
+Port separation — Docker/standalone mode:
+  In Docker/standalone mode (start.sh) the WS server and Flask/gunicorn run
+  as SEPARATE OS processes in the same container.  The WS subprocess's broker
+  adapters own ZMQ_PORT (default 5555) for broker tick data.  If Flask's cache
+  publisher tried to bind the SAME port it would fail (EADDRINUSE) and fall
+  back to a different port that the WS server's SUB socket has no knowledge of
+  — silently dropping all cache invalidations AND tick data (GitHub issue #XXXX).
+
+  Fix: cache invalidation always publishes on ZMQ_CACHE_PORT (default 5556),
+  a dedicated port that never conflicts with the broker-tick publisher.  The WS
+  server's SUB socket connects to BOTH ZMQ_PORT and ZMQ_CACHE_PORT at startup.
 """
 
+import json
+import os
 import threading
+
+import zmq
 
 from utils.logging import get_logger
 
@@ -31,15 +36,48 @@ AUTH_CACHE_TYPE = "AUTH"
 FEED_CACHE_TYPE = "FEED"
 ALL_CACHE_TYPE = "ALL"
 
-# Singleton publisher instance
+# Module-level dedicated publisher for cache invalidation.
+# Separate from SharedZmqPublisher (broker tick data on ZMQ_PORT) so that in
+# Docker/standalone mode both the Flask process and the WS subprocess can bind
+# their respective ZMQ PUB sockets without port collision.
+_cache_pub_context: zmq.Context | None = None
+_cache_pub_socket: zmq.Socket | None = None
+_cache_pub_lock = threading.Lock()
+
+
+def _get_cache_pub_socket() -> zmq.Socket:
+    """Return the module-level ZMQ PUB socket bound to ZMQ_CACHE_PORT.
+
+    Lazily created and cached; thread-safe via _cache_pub_lock.
+    """
+    global _cache_pub_context, _cache_pub_socket
+    if _cache_pub_socket is not None:
+        return _cache_pub_socket
+    with _cache_pub_lock:
+        if _cache_pub_socket is not None:
+            return _cache_pub_socket
+        host = os.getenv("ZMQ_HOST", "127.0.0.1")
+        port = int(os.getenv("ZMQ_CACHE_PORT", "5556"))
+        _cache_pub_context = zmq.Context()
+        sock = _cache_pub_context.socket(zmq.PUB)
+        sock.setsockopt(zmq.LINGER, 1000)
+        sock.setsockopt(zmq.SNDHWM, 100)
+        sock.bind(f"tcp://{host}:{port}")
+        logger.info(f"Cache invalidation publisher bound to {host}:{port}")
+        _cache_pub_socket = sock
+        return sock
+
+
+# Singleton publisher instance (kept for backward-compat imports)
 _publisher_instance = None
 _publisher_lock = threading.Lock()
 
 
 class CacheInvalidationPublisher:
-    """Thin wrapper that emits cache-invalidation events through the
-    shared market-data publisher (`SharedZmqPublisher`). Owns no ZMQ
-    socket of its own — that ownership lives in `connection_manager`.
+    """Publishes cache-invalidation events on the dedicated ZMQ_CACHE_PORT.
+
+    Uses its own ZMQ PUB socket (not SharedZmqPublisher) so Flask and the
+    WS subprocess can co-exist in Docker/standalone mode without port fights.
     """
 
     def publish_invalidation(self, user_id: str, cache_type: str = ALL_CACHE_TYPE) -> bool:
@@ -54,29 +92,23 @@ class CacheInvalidationPublisher:
             return False
 
         try:
-            # Lazy import — avoids a circular dependency between database and
-            # websocket_proxy packages, and keeps cache_invalidation usable
-            # even when the websocket subsystem is disabled.
-            from websocket_proxy.connection_manager import SharedZmqPublisher
-
-            publisher = SharedZmqPublisher()
-            if not publisher._bound:
-                publisher.bind()  # idempotent — only binds first time
-
+            socket = _get_cache_pub_socket()
             topic = f"{CACHE_INVALIDATION_PREFIX}_{cache_type}_{user_id}"
             message = {
                 "action": "invalidate",
                 "user_id": user_id,
                 "cache_type": cache_type,
             }
-            publisher.publish(topic, message)
-
+            socket.send_multipart(
+                [topic.encode("utf-8"), json.dumps(message).encode("utf-8")]
+            )
             logger.info(f"Published cache invalidation for user: {user_id}, type: {cache_type}")
             return True
 
         except Exception as e:
             logger.exception(f"Failed to publish cache invalidation for user {user_id}: {e}")
             return False
+
 
     def close(self) -> None:
         """No-op kept for backward compatibility — this class no longer
