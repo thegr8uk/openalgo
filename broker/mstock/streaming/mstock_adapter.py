@@ -44,27 +44,34 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
     def initialize(
         self, broker_name: str, user_id: str, auth_data: dict[str, str] | None = None
-    ) -> None:
+    ) -> dict[str, Any]:
         self.user_id = user_id
         self.broker_name = broker_name
 
-        if not auth_data:
-            auth_token = get_auth_token(user_id, bypass_cache=True)
-            if not auth_token:
-                self.logger.error(f"No authentication token found for user {user_id}")
-                raise ValueError(f"No authentication token found for user {user_id}")
-        else:
-            auth_token = auth_data.get("auth_token")
-            if not auth_token:
-                self.logger.error("Missing required authentication data")
-                raise ValueError("Missing required authentication data")
+        try:
+            if not auth_data:
+                auth_token = get_auth_token(user_id, bypass_cache=True)
+                if not auth_token:
+                    self.logger.error(f"No authentication token found for user {user_id}")
+                    return self._create_error_response("INIT_ERROR", f"No authentication token found for user {user_id}")
+            else:
+                auth_token = auth_data.get("auth_token")
+                if not auth_token:
+                    self.logger.error("Missing required authentication data")
+                    return self._create_error_response("INIT_ERROR", "Missing required authentication data")
 
-        self.auth_token = auth_token
-        self.data_client = BrokerData(auth_token=auth_token)
-        self.ws_client = MstockWebSocket(auth_token=auth_token)
-        self.ws_client.on_connect = self._on_ws_connect
-        self.running = True
-        self.logger.info(f"mstock adapter initialized for user {user_id}")
+            self.auth_token = auth_token
+            self.data_client = BrokerData(auth_token=auth_token)
+            self.ws_client = MstockWebSocket(
+                auth_token=auth_token, token_provider=self._get_fresh_auth_token
+            )
+            self.ws_client.on_connect = self._on_ws_connect
+            self.running = True
+            self.logger.info(f"mstock adapter initialized for user {user_id}")
+            return self._create_success_response("Initialized mstock WebSocket adapter")
+        except Exception as e:
+            self.logger.error(f"Initialization error: {e}")
+            return self._create_error_response("INIT_ERROR", str(e))
 
     def _get_fresh_auth_token(self) -> str | None:
         """
@@ -82,19 +89,26 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
             self.logger.warning(f"Failed to re-read fresh mstock auth token: {e}")
             return None
 
-    def connect(self) -> None:
+    def connect(self) -> dict[str, Any]:
         """Establish persistent connection to mstock WebSocket"""
         if not self.ws_client:
             self.logger.error("WebSocket client not initialized. Call initialize() first.")
-            return
+            return self._create_error_response(
+                "NOT_INITIALIZED", "WebSocket client not initialized"
+            )
 
-        self.logger.info("Connecting to mstock WebSocket in streaming mode...")
-        self.running = True
+        try:
+            self.logger.info("Connecting to mstock WebSocket in streaming mode...")
+            self.running = True
 
-        # Start streaming — returns immediately (same as Angel/Upstox pattern)
-        self.ws_client.connect_stream(self._on_data)
-        self.connected = True
-        self.logger.info("mstock WebSocket adapter connected")
+            # Start streaming — returns immediately (same as Angel/Upstox pattern)
+            self.ws_client.connect_stream(self._on_data)
+            self.connected = True
+            self.logger.info("mstock WebSocket adapter connected")
+            return self._create_success_response("Connected to mstock WebSocket")
+        except Exception as e:
+            self.logger.error(f"Connection error: {e}")
+            return self._create_error_response("CONNECTION_ERROR", str(e))
 
     def _on_ws_connect(self) -> None:
         """Called when WebSocket connects and logs in. Resubscribe to all stored subscriptions."""

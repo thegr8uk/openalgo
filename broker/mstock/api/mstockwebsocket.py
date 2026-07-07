@@ -398,6 +398,25 @@ class MstockWebSocket:
         """Check if WebSocket is connected and logged in"""
         return self._connected and self._logged_in and self.running
 
+    def _build_ws_url(self) -> str:
+        """Build the WebSocket URL with fresh access token and API key"""
+        return f"{self.WS_URL}?ACCESS_TOKEN={self.auth_token}&API_KEY={self.api_key}"
+
+    def _refresh_auth_token(self):
+        """Re-read a fresh access token from the token provider if available."""
+        if not self.token_provider:
+            return
+        try:
+            fresh_token = self.token_provider()
+            if fresh_token:
+                self.auth_token = fresh_token
+                self.ws_url = self._build_ws_url()
+                logger.info("Refreshed mstock auth token from database for reconnect")
+            else:
+                logger.warning("No fresh auth token returned by token_provider")
+        except Exception as e:
+            logger.error(f"Error refreshing auth token on reconnect: {e}")
+
     # ==================== One-off Fetch (sync) ====================
 
     def fetch_quote(self, token: str, exchange_type: int, mode: int = 3) -> dict | None:
