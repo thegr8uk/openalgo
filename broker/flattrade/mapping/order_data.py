@@ -328,13 +328,14 @@ def transform_positions_data(positions_data):
     return transformed_data
 
 
-def map_portfolio_data(portfolio_data):
+def map_portfolio_data(portfolio_data, auth_token=None):
     """
     Processes and modifies a list of Portfolio dictionaries based on specific conditions and
     ensures both holdings and totalholding parts are transmitted in a single response.
 
     Parameters:
     - portfolio_data: A list of dictionaries, where each dictionary represents portfolio information.
+    - auth_token: Direct broker authentication token (optional).
 
     Returns:
     - The modified portfolio_data with 'product' fields changed for 'holdings' and 'totalholding' included.
@@ -344,7 +345,8 @@ def map_portfolio_data(portfolio_data):
         logger.info("No data available or incorrect data format.")
         return []
 
-    # Iterate over the portfolio_data list and process each entry
+    # Map symbols and collect them for LTP fetching
+    symbols_payload = []
     for portfolio in portfolio_data:
         # Ensure 'stat' is 'Ok' before proceeding
         if portfolio.get("stat") != "Ok":
@@ -365,6 +367,51 @@ def map_portfolio_data(portfolio_data):
                 logger.info(
                     f"Flattrade Portfolio - Product Value for {symbol} Not Found or Changed."
                 )
+
+            # Store resolved info and schedule for LTP lookup
+            symbols_payload.append({
+                "symbol": exch_tsym["tsym"],
+                "exchange": exchange,
+                "ref": exch_tsym
+            })
+
+    # Resolve auth_token from request context if not provided
+    if not auth_token:
+        try:
+            from flask import request
+            if request and request.is_json and request.json:
+                api_key = request.json.get("apikey")
+                if api_key:
+                    from database.auth_db import get_auth_token_broker
+                    auth_token, _ = get_auth_token_broker(api_key)
+        except Exception as ex:
+            logger.debug(f"Could not get api key from request: {ex}")
+
+    # Fallback to database query if still not resolved
+    if not auth_token:
+        try:
+            from database.auth_db import ApiKeys, decrypt_token, get_auth_token_broker
+            api_key_obj = ApiKeys.query.first()
+            if api_key_obj:
+                api_key = decrypt_token(api_key_obj.api_key_encrypted)
+                auth_token, _ = get_auth_token_broker(api_key)
+        except Exception as e:
+            logger.warning(f"Failed to fetch api key from database fallback: {e}")
+
+    # Fetch LTPs sequentially to avoid eventlet ThreadPoolExecutor freezing/deadlocking
+    if auth_token and symbols_payload:
+        try:
+            from broker.flattrade.api.data import BrokerData
+            data_handler = BrokerData(auth_token)
+            for s in symbols_payload:
+                try:
+                    quote = data_handler.get_quotes(s["symbol"], s["exchange"])
+                    if quote and "ltp" in quote:
+                        s["ref"]["_ltp"] = float(quote["ltp"])
+                except Exception as ex:
+                    logger.warning(f"Failed to fetch quote for {s['symbol']}: {ex}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize BrokerData or fetch quotes: {e}")
 
     return portfolio_data
 
@@ -405,52 +452,19 @@ def calculate_portfolio_statistics(holdings_data):
             float(holding.get("npoadqty", 0)), float(holding.get("dpqty", 0))
         )
         upload_price = float(holding.get("upldprc", 0))
-        market_price = float(
-            nse_entry.get("upldprc", 0)
-        )  # Assuming 'pp' is the market price for NSE
+        
+        # Get the fetched LTP or fall back to upload_price (average cost) so P&L is 0 if quotes fail
+        market_price = float(nse_entry.get("_ltp", 0.0) or 0.0) or upload_price
 
         # Calculate investment value and holding value for NSE
         inv_value = quantity * upload_price
-        holding_value = quantity * upload_price
+        holding_value = quantity * market_price
         profit_and_loss = holding_value - inv_value
-        pnl_percentage = (profit_and_loss / inv_value) * 100 if inv_value != 0 else 0
 
         # Accumulate the totals
-        # totalholdingvalue += holding_value
         totalinvvalue += inv_value
+        totalholdingvalue += holding_value
         totalprofitandloss += profit_and_loss
-
-        # Valuation formula from API, using upload_price (cost price) as LTP is not available from this endpoint.
-        # This calculates the cost valuation of these quantities.
-        holdqty = float(holding.get("holdqty", 0))
-        btstqty = float(holding.get("btstqty", 0))
-        brkcolqty = float(holding.get("brkcolqty", 0))
-        unplgdqty = float(holding.get("unplgdqty", 0))
-        benqty = float(holding.get("benqty", 0))
-        # Using npoadqty as per Flattrade documentation
-        npoadqty_val = float(
-            holding.get("npoadqty", 0)
-        )  # Renamed to avoid conflict with loop variable if any
-        dpqty = float(holding.get("dpqty", 0))
-        usedqty = float(holding.get("usedqty", 0))
-
-        # Current P&L calculation uses upload_price for both cost and current value, resulting in 0 P&L.
-        # True P&L requires LTP (Last Traded Price).
-        # inv_value = quantity * upload_price (already calculated)
-        # current_market_value_of_holding = quantity * LTP (LTP is missing)
-        # profit_and_loss = current_market_value_of_holding - inv_value
-
-        # The existing profit_and_loss calculation (holding_value - inv_value) where both use upload_price correctly results in 0.
-        # This is a cost-based P&L, which is 0 until sold or if current price differs.
-
-        valuation = (
-            (btstqty + holdqty + brkcolqty + unplgdqty + benqty + max(npoadqty_val, dpqty))
-            - usedqty
-        ) * upload_price
-        # logger.info(f"test valuation :{npoadqty_val}")
-        # logger.info(f"test valuation :{upload_price}")
-        # Accumulate total valuation
-        totalholdingvalue += valuation
 
     # Calculate overall P&L percentage
     totalpnlpercentage = (totalprofitandloss / totalinvvalue) * 100 if totalinvvalue != 0 else 0
@@ -472,18 +486,27 @@ def transform_holdings_data(holdings_data):
                 exch for exch in holding.get("exch_tsym", []) if exch.get("exch") == "NSE"
             ]
             for exch_tsym in nse_entries:
+                quantity = int(holding.get("holdqty", 0)) + max(
+                    int(holding.get("npoadqty", 0)), int(holding.get("dpqty", 0))
+                )
+                avg_price = float(holding.get("upldprc", 0.0))
+                ltp = float(exch_tsym.get("_ltp", 0.0) or 0.0)
+                
+                if ltp > 0:
+                    pnl = (ltp - avg_price) * quantity
+                    pnlpercent = (pnl / (avg_price * quantity) * 100) if (avg_price and quantity) else 0.0
+                else:
+                    pnl = 0.0
+                    pnlpercent = 0.0
+
                 transformed_position = {
                     "symbol": exch_tsym.get("tsym", ""),
                     "exchange": exch_tsym.get("exch", ""),
-                    # Using npoadqty as per Flattrade documentation
-                    "quantity": int(holding.get("holdqty", 0))
-                    + max(int(holding.get("npoadqty", 0)), int(holding.get("dpqty", 0))),
+                    "quantity": quantity,
                     "product": exch_tsym.get("product", "CNC"),
-                    # P&L calculation here will be 0 as LTP is not available.
-                    # Using upload_price as a placeholder for current price for this calculation.
-                    "avg_price": float(holding.get("upldprc", 0.0)),
-                    "pnl": 0.0,  # (LTP - avg_price) * quantity; LTP is missing, so P&L is effectively 0 for now
-                    "pnlpercent": 0.0,  # (pnl / (avg_price * quantity)) * 100 if avg_price and quantity are not 0
+                    "average_price": avg_price,
+                    "pnl": pnl,
+                    "pnlpercent": pnlpercent,
                 }
                 transformed_data.append(transformed_position)
     return transformed_data

@@ -118,7 +118,13 @@ def get_holdings_with_auth(
             )
 
         # Transform data using mapping functions
-        holdings = broker_funcs["map_portfolio_data"](holdings)
+        import inspect
+        map_portfolio_params = inspect.signature(broker_funcs["map_portfolio_data"]).parameters
+        if "auth_token" in map_portfolio_params:
+            holdings = broker_funcs["map_portfolio_data"](holdings, auth_token=auth_token)
+        else:
+            holdings = broker_funcs["map_portfolio_data"](holdings)
+
         portfolio_stats = broker_funcs["calculate_portfolio_statistics"](holdings)
         holdings = broker_funcs["transform_holdings_data"](holdings)
 
