@@ -148,12 +148,9 @@ class TradeSmartWebSocket:
         self.ws_thread = None
 
     def _on_open(self, ws) -> None:
-        self.connected = True
         self._update_last_message_time()
         self.logger.info("WebSocket opened, sending authentication")
-        if self._send_authentication():
-            self._start_heartbeat()
-            self._call_external_callback(self.on_open, ws)
+        self._send_authentication()
 
     def _send_authentication(self) -> bool:
         auth_msg = {
@@ -192,9 +189,16 @@ class TradeSmartWebSocket:
 
     def _handle_auth_response(self, data: dict[str, Any]) -> bool:
         if data.get("s") == self.AUTH_SUCCESS:
+            self.connected = True
             self.logger.info("Authentication successful")
+            self._start_heartbeat()
+            ws = self.ws
+            self._call_external_callback(self.on_open, ws)
         else:
             self.logger.error(f"Authentication failed: {data}")
+            self.connected = False
+            self.running = False
+            self._close_websocket()
         return True
 
     def _on_error(self, ws, error) -> None:

@@ -316,3 +316,26 @@ def authenticate_broker(otp_code, password=None):
         "authenticate_broker called - this is deprecated. Use send_otp() and verify_otp() instead."
     )
     return None, None, "Please use the two-step authentication flow"
+
+
+def logout_api(auth):
+    """
+    Log out from mStock session using Type B authentication.
+    """
+    api_key = os.getenv("BROKER_API_SECRET")
+    headers = {
+        "X-Mirae-Version": "1",
+        "Authorization": f"Bearer {auth}",
+        "X-PrivateKey": api_key,
+    }
+    try:
+        client = get_httpx_client()
+        response = client.get(
+            "https://api.mstock.trade/openapi/typeb/logout",
+            headers=headers,
+        )
+        response.raise_for_status()
+        return response.json(), None
+    except Exception as e:
+        logger.error(f"Logout failed: {str(e)}")
+        return None, str(e)

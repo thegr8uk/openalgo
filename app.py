@@ -481,6 +481,7 @@ def create_app():
             request.path.startswith("/static/")
             or request.path.startswith("/api/")
             or request.path.startswith("/assets/")  # React frontend assets
+            or request.path.startswith("/.well-known/")  # Well-known URIs
             or request.path
             in [
                 "/",

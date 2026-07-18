@@ -82,6 +82,29 @@ def ratelimit_handler(e):
     return jsonify(status="error", message="Too many login attempts. Please wait a minute and try again."), 429
 
 
+@auth_bp.route("", methods=["GET"])
+def auth_jwt_redirect():
+    jwt_token = request.args.get("jwt")
+    if not jwt_token:
+        return redirect("/login")
+
+    response = make_response(redirect("/dashboard"))
+    cookie_name = current_app.config.get("SESSION_COOKIE_NAME", "session")
+    secure = current_app.config.get("SESSION_COOKIE_SECURE", False)
+    httponly = current_app.config.get("SESSION_COOKIE_HTTPONLY", True)
+    samesite = current_app.config.get("SESSION_COOKIE_SAMESITE", "Lax")
+
+    response.set_cookie(
+        cookie_name,
+        jwt_token,
+        secure=secure,
+        httponly=httponly,
+        samesite=samesite
+    )
+    logger.info(f"Set session cookie '{cookie_name}' from query parameter. Redirecting to /dashboard.")
+    return response
+
+
 @auth_bp.route("/csrf-token", methods=["GET"])
 def get_csrf_token():
     """Return a CSRF token for React SPA to use in form submissions."""
