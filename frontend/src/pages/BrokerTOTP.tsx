@@ -148,6 +148,17 @@ const brokerFields: Record<string, BrokerConfig> = {
     warning:
       'Make sure TOTP is registered in your Kotak NEO mobile app. Go to Settings > Security > Enable TOTP.',
   },
+  indmoney: {
+    fields: [
+      {
+        name: 'access_token',
+        label: 'Access Token',
+        type: 'password',
+        placeholder: 'Enter IndMoney Access Token',
+      },
+    ],
+    callbackUrl: '/indmoney/callback',
+  },
   motilal: {
     fields: [
       { name: 'userid', label: 'User ID', type: 'text', placeholder: 'Enter your User ID' },
@@ -294,6 +305,7 @@ const brokerNames: Record<string, string> = {
   tradejini: 'Tradejini',
   zebu: 'Zebu',
   jmfinancial: 'JM Financial',
+  indmoney: 'IndMoney',
 }
 
 export default function BrokerTOTP() {

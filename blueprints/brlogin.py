@@ -475,11 +475,17 @@ def broker_callback(broker, para=None):
                     }
                 ), 400
     elif broker == "indmoney":
-        code = "indmoney"
-        logger.debug(f"IndMoney broker - The code is {code}")
-        auth_token, error_message = auth_function(code)
+        if request.method == "GET":
+            # Redirect to React login page (where access token textbox is shown)
+            return redirect("/broker/indmoney/totp")
 
-        forward_url = "broker.html"
+        elif request.method == "POST":
+            access_token = request.form.get("access_token")
+            if not access_token:
+                return jsonify({"status": "error", "message": "Access Token is required"}), 400
+
+            auth_token, error_message = auth_function(access_token)
+            forward_url = "broker.html"
 
     elif broker == "deltaexchange":
         code = "deltaexchange"

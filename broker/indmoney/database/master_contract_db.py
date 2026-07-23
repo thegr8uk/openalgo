@@ -525,12 +525,13 @@ def master_contract_download():
                 {"status": "success", "message": success_msg},
             )
         else:
-            error_msg = "No data downloaded from Indmoney"
+            error_msg = "No data downloaded from Indmoney (check if your access token is valid)"
             update_status("indmoney", "error", error_msg)
-            return socketio.emit(
+            socketio.emit(
                 "master_contract_download",
                 {"status": "error", "message": error_msg},
             )
+            raise RuntimeError(error_msg)
 
     except Exception as e:
         logger.exception(f"Error during master contract download: {e}")

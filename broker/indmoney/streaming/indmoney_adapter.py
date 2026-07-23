@@ -553,7 +553,7 @@ class IndmoneyWebSocketAdapter(BaseBrokerWebSocketAdapter):
             with self.lock:
                 for sub in self.subscriptions.values():
                     # INDmoney returns only the token part, not the full SEGMENT:TOKEN
-                    if sub["token"] == instrument:
+                    if str(sub["token"]) == str(instrument):
                         subscription = sub
                         break
 
