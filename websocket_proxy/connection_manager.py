@@ -257,7 +257,7 @@ class ConnectionPool:
 
         # State
         self.initialized = False
-        self.connected = False
+        self._connected = False
 
         # Peak usage tracking (for logging purposes)
         self.peak_total_symbols = 0
@@ -270,6 +270,26 @@ class ConnectionPool:
             f"[POOL] Config: {self.max_symbols} symbols/connection x {self.max_connections} max connections = {self.max_symbols * self.max_connections} total capacity"
         )
         self.logger.info("[POOL] ==================================================")
+
+    @property
+    def connected(self) -> bool:
+        """Check if pool is connected.
+        
+        The pool is considered connected if self._connected is True and at least
+        one of its adapters is actively connected.
+        """
+        with self.lock:
+            if not self._connected:
+                return False
+            if not self.adapters:
+                return False
+            return any(bool(getattr(adapter, "connected", False)) for adapter in self.adapters)
+
+    @connected.setter
+    def connected(self, value: bool):
+        """Set the connection state of the pool."""
+        with self.lock:
+            self._connected = value
 
     def _create_adapter(self) -> Any:
         """
