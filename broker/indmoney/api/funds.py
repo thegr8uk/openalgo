@@ -57,6 +57,36 @@ DEFAULT_MARGIN_RESPONSE = {
 }
 
 
+def test_auth_token(auth_token):
+    """
+    Test the validity of the auth token by making a lightweight API call.
+
+    Unlike get_margin_data(), this function does NOT silently swallow HTTP
+    errors. It explicitly returns (False, error_message) on any non-200
+    response so the caller can differentiate between a valid token returning
+    zero balances and an expired/invalid token.
+
+    Args:
+        auth_token (str): The authorization token for Indmoney API
+
+    Returns:
+        tuple: (is_valid: bool, error_message: str | None)
+               is_valid is True only when the API responds with HTTP 200.
+    """
+    try:
+        client = get_httpx_client()
+        headers = {"Authorization": auth_token}
+        url = get_url("/funds")
+        response = request_with_retry(client, "GET", url, headers=headers, timeout=10.0)
+        if response.status_code == 200:
+            return True, None
+        error_detail = response.text[:200] if response.text else ""
+        return False, f"HTTP {response.status_code}: {error_detail}"
+    except Exception as e:
+        logger.error(f"test_auth_token exception: {str(e)}", exc_info=True)
+        return False, str(e)
+
+
 def get_margin_data(auth_token):
     """
     Fetch margin data from Indmoney API using the provided auth token.

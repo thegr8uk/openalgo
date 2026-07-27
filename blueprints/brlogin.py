@@ -55,8 +55,12 @@ def broker_callback(broker, para=None):
             logger.warning(f"User not in session for {broker} callback, redirecting to login")
             return redirect(url_for("auth.login"))
 
-    if session.get("logged_in"):
-        # Store broker in session and g
+    if session.get("logged_in") and request.method == "GET":
+        # Only redirect GET requests to the dashboard when already logged in.
+        # POST requests (e.g. autologin scripts submitting a fresh token) must
+        # always be processed so the new token is saved to the database.
+        # Skipping this check for POST prevents the "callback bypass" bug where
+        # an expired token persists because the fresh token is never stored.
         session["broker"] = broker
         return redirect(url_for("dashboard_bp.dashboard"))
 
