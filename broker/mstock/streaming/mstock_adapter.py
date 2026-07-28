@@ -66,12 +66,29 @@ class MstockWebSocketAdapter(BaseBrokerWebSocketAdapter):
                 auth_token=auth_token, token_provider=self._get_fresh_auth_token
             )
             self.ws_client.on_connect = self._on_ws_connect
+            self.ws_client.on_disconnect = self._on_ws_disconnect
             self.running = True
             self.logger.info(f"mstock adapter initialized for user {user_id}")
             return self._create_success_response("Initialized mstock WebSocket adapter")
         except Exception as e:
             self.logger.error(f"Initialization error: {e}")
             return self._create_error_response("INIT_ERROR", str(e))
+
+    @property
+    def connected(self) -> bool:
+        """Dynamic check of underlying WebSocket connection state"""
+        if self.ws_client and self.running:
+            return self.ws_client.is_connected()
+        return getattr(self, "_connected_override", False)
+
+    @connected.setter
+    def connected(self, value: bool) -> None:
+        self._connected_override = value
+
+    def _on_ws_disconnect(self) -> None:
+        """Called when WebSocket disconnects"""
+        self.logger.warning("mstock WebSocket disconnected callback triggered")
+        self._connected_override = False
 
     def _get_fresh_auth_token(self) -> str | None:
         """

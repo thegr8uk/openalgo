@@ -51,6 +51,7 @@ class MstockWebSocket:
         self.on_order_update = None
         self.on_trade_update = None
         self.on_connect = None
+        self.on_disconnect = None
 
     @staticmethod
     def parse_binary_packet(data: bytes) -> dict | None:
@@ -202,7 +203,6 @@ class MstockWebSocket:
     def _run_websocket(self):
         """Run the WebSocket connection with reconnection"""
         self._reconnect_attempts = 0
-        max_attempts = 10
 
         while self.running:
             try:
@@ -221,12 +221,15 @@ class MstockWebSocket:
                 break
 
             self._reconnect_attempts += 1
-            if self._reconnect_attempts >= max_attempts:
-                logger.error("Max reconnect attempts reached")
-                break
+            delay = min(2 * (1.5 ** min(self._reconnect_attempts, 10)), 60)
+            if self._reconnect_attempts > 10:
+                logger.warning(
+                    f"mStock WebSocket broker endpoint unavailable. "
+                    f"Continuing retry in {delay:.0f}s (attempt {self._reconnect_attempts})..."
+                )
+            else:
+                logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
 
-            delay = min(2 * (1.5 ** self._reconnect_attempts), 60)
-            logger.info(f"Reconnecting in {delay:.0f}s (attempt {self._reconnect_attempts})...")
             time.sleep(delay)
 
             # Re-read a fresh access token before reconnecting so a reconnect
@@ -298,6 +301,11 @@ class MstockWebSocket:
         logger.info(f"WebSocket closed (code={close_status_code}, msg={close_msg})")
         self._connected = False
         self._logged_in = False
+        if self.on_disconnect:
+            try:
+                self.on_disconnect()
+            except Exception as e:
+                logger.error(f"Error in on_disconnect callback: {e}")
 
     def _resubscribe_all(self):
         """Re-subscribe to all tracked subscriptions after reconnection"""
