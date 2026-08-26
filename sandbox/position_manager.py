@@ -442,10 +442,14 @@ class PositionManager:
                     # For OPEN positions (qty != 0): always include
                     if position.quantity != 0:
                         positions.append(position)
-                    # For CLOSED positions (qty == 0): only include if actually traded today
-                    # Check: today_realized_pnl != 0 (has P&L from today's trades)
-                    # This prevents old closed positions with corrupted updated_at from showing
+                    # For CLOSED positions (qty == 0): include if traded today
+                    # Case 1: Has non-zero today_realized_pnl (normal case)
+                    # Case 2: Created in current session (buy+sell at same price → P&L = 0)
+                    #         These are valid today trades even though P&L is zero.
                     elif position.today_realized_pnl and position.today_realized_pnl != 0:
+                        positions.append(position)
+                    elif position.created_at and position.created_at >= last_session_expiry:
+                        # Position was opened AND closed in this session (zero net P&L trade)
                         positions.append(position)
                     # Skip old closed positions with corrupted updated_at
                 # If position was updated before last session expiry, only include NRML with non-zero quantity
