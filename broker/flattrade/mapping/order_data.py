@@ -313,12 +313,20 @@ def transform_positions_data(positions_data):
         # Calculate total P&L (realized + unrealized)
         total_pnl = realized_pnl + unrealized_pnl
 
+        # For closed positions, Noren/Flattrade zeroes out netavgprc
+        # Use daybuyavgprc or totbuyavgprc as fallback for average price
+        avg_price = float(position.get("netavgprc", 0.0))
+        if avg_price == 0 and float(position.get("netqty", 0)) == 0:
+            avg_price = float(position.get("daybuyavgprc", 0.0)) or float(
+                position.get("totbuyavgprc", 0.0)
+            )
+
         transformed_position = {
             "symbol": position.get("tsym", ""),
             "exchange": position.get("exch", ""),
             "product": position.get("prd", ""),
             "quantity": position.get("netqty", 0),
-            "average_price": position.get("netavgprc", 0.0),
+            "average_price": avg_price,
             "realized_pnl": realized_pnl,
             "unrealized_pnl": unrealized_pnl,
             "ltp": position.get("lp", 0.0),

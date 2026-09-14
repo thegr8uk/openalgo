@@ -17,6 +17,8 @@ export interface PriceableItem {
   quantity?: number
   average_price?: number
   today_realized_pnl?: number // Sandbox: today's realized P&L from closed partial trades
+  realized_pnl?: number // Live broker: realized P&L from closed partial trades
+  unrealized_pnl?: number // Live broker: unrealized P&L
   lot_size?: number // Contract multiplier (e.g. 0.01 for Delta Exchange ETHUSD.P)
 }
 
@@ -261,9 +263,9 @@ export function useLivePrice<T extends PriceableItem>(
       let calculatedPnl = item.pnl || 0
       let calculatedPnlPercent = item.pnlpercent || 0
 
-      // Get today's realized P&L if available (from sandbox mode)
+      // Get today's realized P&L if available (from sandbox mode or live broker)
       // This ensures cumulative P&L (realized + unrealized) is shown correctly
-      const todayRealizedPnl = item.today_realized_pnl || 0
+      const todayRealizedPnl = item.today_realized_pnl ?? item.realized_pnl ?? 0
 
       if (currentLtp && avgPrice > 0) {
         // Contract multiplier: e.g. 0.01 for Delta Exchange ETHUSD.P (1 lot = 0.01 ETH)

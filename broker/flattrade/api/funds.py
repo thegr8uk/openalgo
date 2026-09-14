@@ -73,13 +73,16 @@ def get_margin_data(auth_token):
             total_unrealised += unrealized_pnl
 
     try:
-        # Calculate total_available_margin as the sum of 'cash' and 'payin'
+        total_collateral = float(margin_data.get("collateral", 0)) or float(
+            margin_data.get("brkcollamt", 0)
+        )
+        # Calculate total_available_margin as sum of 'cash', 'payin', 'collateral' minus 'marginused'
         total_available_margin = (
             float(margin_data.get("cash", 0))
             + float(margin_data.get("payin", 0))
+            + total_collateral
             - float(margin_data.get("marginused", 0))
         )
-        total_collateral = float(margin_data.get("brkcollamt", 0))
         total_used_margin = float(margin_data.get("marginused", 0))
 
         # Construct and return the processed margin data
