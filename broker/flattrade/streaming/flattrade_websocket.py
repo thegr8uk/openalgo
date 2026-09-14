@@ -236,15 +236,12 @@ class FlattradeWebSocket:
 
     # WebSocket Event Handlers
     def _on_open(self, ws) -> None:
-        """Handle WebSocket connection open event"""
-        self.connected = True
+        """Handle WebSocket connection open event - wait for auth before marking connected"""
         self._update_last_message_time()
 
         self.logger.info("WebSocket connection opened, sending authentication")
 
-        if self._send_authentication():
-            self._start_heartbeat()
-            self._call_external_callback(self.on_open, ws)
+        self._send_authentication()
 
     def _send_authentication(self) -> bool:
         """
@@ -306,7 +303,7 @@ class FlattradeWebSocket:
 
     def _handle_auth_response(self, data: dict[str, Any]) -> bool:
         """
-        Handle authentication response
+        Handle authentication response - set connected only after auth succeeds
 
         Args:
             data: Authentication response data
@@ -315,7 +312,11 @@ class FlattradeWebSocket:
             bool: True (message handled)
         """
         if str(data.get("s") or "").strip().upper() == self.AUTH_SUCCESS:
+            self.connected = True
             self.logger.info("Authentication successful")
+            self._start_heartbeat()
+            ws = self.ws
+            self._call_external_callback(self.on_open, ws)
         else:
             self.logger.error(f"Authentication failed: {data}")
             self.auth_failed = True

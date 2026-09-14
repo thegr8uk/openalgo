@@ -326,7 +326,9 @@ const brokerNames: Record<string, string> = {
   shoonya: 'Shoonya',
   tradejini: 'Tradejini',
   zebu: 'Zebu',
+  jmfinancial: 'JM Financial',
 }
+
 
 export default function BrokerTOTP() {
   const { broker } = useParams<{ broker: string }>()

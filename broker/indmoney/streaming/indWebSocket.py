@@ -151,14 +151,14 @@ class IndWebSocket:
         if data == "pong":
             timestamp = time.time()
             formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
-            logger.info(f"Heartbeat pong received, Timestamp: {formatted_timestamp}")
+            logger.debug(f"Heartbeat pong received, Timestamp: {formatted_timestamp}")
             self.last_pong_timestamp = timestamp
 
     def _on_ping(self, wsapp, data):
         """Handle ping from server"""
         timestamp = time.time()
         formatted_timestamp = time.strftime("%d-%m-%y %H:%M:%S", time.localtime(timestamp))
-        logger.info(f"Ping received from server, Timestamp: {formatted_timestamp}")
+        logger.debug(f"Ping received from server, Timestamp: {formatted_timestamp}")
 
     def subscribe(self, instruments, mode="ltp"):
         """

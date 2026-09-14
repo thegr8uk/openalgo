@@ -595,6 +595,8 @@ class MstockWebSocket:
         """Called when WebSocket connection is opened"""
         logger.info("mstock WebSocket connected")
         self._connected = True
+        self._logged_in = True
+        self._login_event.set()
         self._reconnect_attempts = 0
 
         # Send LOGIN message
@@ -608,6 +610,17 @@ class MstockWebSocket:
             logger.exception("mstock LOGIN send failed; leaving session unauthenticated")
             return
         logger.debug("Sent LOGIN message")
+        logger.info("mstock login confirmed")
+
+        # Re-subscribe to existing subscriptions
+        self._resubscribe_all()
+
+        # Trigger on_connect callback if registered
+        if self.on_connect:
+            try:
+                self.on_connect()
+            except Exception as e:
+                logger.error(f"Error in on_connect callback: {e}")
 
         # The handshake is complete once LOGIN is away - there is no ACK to
         # wait for, and gating readiness on one stalls the feed permanently.
@@ -659,6 +672,11 @@ class MstockWebSocket:
         logger.info(f"WebSocket closed (code={close_status_code}, msg={close_msg})")
         self._connected = False
         self._logged_in = False
+        if self.on_disconnect:
+            try:
+                self.on_disconnect()
+            except Exception as e:
+                logger.error(f"Error in on_disconnect callback: {e}")
 
         if self._is_auth_error(close_msg) or self._is_auth_error(close_status_code):
             self.auth_failed = True
@@ -860,6 +878,25 @@ class MstockWebSocket:
     def is_connected(self) -> bool:
         """Check if WebSocket is connected and logged in"""
         return self._connected and self._logged_in and self.running
+
+    def _build_ws_url(self) -> str:
+        """Build the WebSocket URL with fresh access token and API key"""
+        return f"{self.WS_URL}?ACCESS_TOKEN={self.auth_token}&API_KEY={self.api_key}"
+
+    def _refresh_auth_token(self):
+        """Re-read a fresh access token from the token provider if available."""
+        if not self.token_provider:
+            return
+        try:
+            fresh_token = self.token_provider()
+            if fresh_token:
+                self.auth_token = fresh_token
+                self.ws_url = self._build_ws_url()
+                logger.info("Refreshed mstock auth token from database for reconnect")
+            else:
+                logger.warning("No fresh auth token returned by token_provider")
+        except Exception as e:
+            logger.error(f"Error refreshing auth token on reconnect: {e}")
 
     # ==================== One-off Fetch (sync) ====================
 

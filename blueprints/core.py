@@ -1,8 +1,9 @@
 import base64
 import io
+import os
 
 import qrcode
-from flask import Blueprint, flash, redirect, request, session, url_for
+from flask import Blueprint, flash, redirect, request, session, url_for, send_file, current_app
 
 from blueprints.apikey import generate_api_key
 from database.auth_db import upsert_api_key
@@ -79,3 +80,10 @@ def setup():
         logger.error(f"Failed to create admin user {username}")
         flash("User already exists or an error occurred", "error")
         return redirect(url_for("react.react_setup"))
+
+
+@core_bp.route("/.well-known/assetlinks.json")
+def assetlinks():
+    """Serve the assetlinks.json file from the application root."""
+    assetlinks_path = os.path.join(current_app.root_path, "assetlinks.json")
+    return send_file(assetlinks_path, mimetype="application/json")

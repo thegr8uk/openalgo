@@ -85,6 +85,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         self._broker_name = "kotak"
         self._auth_config = None
         self._connected = False
+        self.connected = False
         self._lock = threading.RLock()
 
         # Reconnection state
@@ -197,6 +198,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Reset reconnection state only when connection actually succeeds
             with self._lock:
                 self._connected = True
+                self.connected = True
                 self._reconnect_attempts = 0
                 self._reconnecting = False
 
@@ -206,6 +208,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
 
             with self._lock:
                 self._connected = False
+                self.connected = False
                 if not self._running:
                     logger.debug("Not reconnecting - adapter stopped")
                     return
@@ -667,6 +670,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
         except Exception as e:
             logger.error(f"Error connecting to Kotak WebSocket: {e}")
             self._connected = False
+            self.connected = False
 
     def disconnect(self):
         """
@@ -703,6 +707,7 @@ class KotakWebSocketAdapter(BaseBrokerWebSocketAdapter):
             # Clear all internal caches to release memory
             with self._lock:
                 self._connected = False
+                self.connected = False
                 self._ltp_cache.clear()
                 self._quote_cache.clear()
                 self._depth_cache.clear()
